@@ -1,21 +1,15 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
-from datetime import datetime
+from datetime import datetime, timedelta
 
-def validate_date(date_text):
-    try:
-        datetime.strptime(date_text, '%Y-%m-%d')
-        return True
-    except ValueError:
-        return False
+# --- Ρυθμίσεις Σελίδας ---
+st.set_page_config(page_title="Portfolio Analysis Tool", layout="wide")
+st.title("📊 Ανάλυση Μετοχών & Υπολογισμός Beta")
 
-def validate_ticker(ticker_symbol):
-    ticker_info = yf.Ticker(ticker_symbol)
-    history = ticker_info.history(period="1d")
-    return not history.empty
-
+# --- Συναρτήσεις Υπολογισμού ---
 def calculate_beta(stock_returns, market_returns, method):
     df = pd.concat([stock_returns, market_returns], axis=1).dropna()
     df.columns = ['Stock', 'Market']
@@ -43,63 +37,60 @@ def calculate_beta(stock_returns, market_returns, method):
         beta_dimson = model.params['Market'] + model.params['Market_Lag1'] + model.params['Market_Lag2']
         return beta_dimson, model.f_pvalue
 
-def main():
-    while True:
-        ticker = input("Εισάγετε το σύμβολο της μετοχής (π.χ. AAPL): ").upper()
-        if validate_ticker(ticker): break
-        print(f"Σφάλμα: Το σύμβολο '{ticker}' δεν είναι έγκυρο.")
+# --- Sidebar για Εισαγωγή Δεδομένων ---
+st.sidebar.header("Παράμετροι Ανάλυσης")
+ticker = st.sidebar.text_input("Σύμβολο Μετοχής (π.χ. AAPL, TSLA)", "AAPL").upper()
 
-    while True:
-        start = input("Εισάγετε ημερομηνία έναρξης (YYYY-MM-DD): ")
-        if validate_date(start): break
-        print("Λάθος μορφή ημερομηνίας.")
-        
-    while True:
-        end = input("Εισάγετε ημερομηνία λήξης (YYYY-MM-DD): ")
-        if validate_date(end) and end > start: break
-        print("Η ημερομηνία λήξης πρέπει να είναι μεταγενέστερη.")
+col1, col2 = st.sidebar.columns(2)
+start_date = col1.date_input("Έναρξη", datetime.now() - timedelta(days=365))
+end_date = col2.date_input("Λήξη", datetime.now())
 
-    print("\n1: Ιστορικές Τιμές\n2: Υπολογισμό Beta (β)")
-    while True:
-        mode = input("Επιλογή (1/2): ")
-        if mode in ["1", "2"]: break
+analysis_mode = st.sidebar.radio("Λειτουργία:", ["Ιστορικές Τιμές", "Υπολογισμός Beta (β)"])
 
-    if mode == "1":
-        print("\nΣυχνότητα: 1: Daily, 2: Monthly, 3: Annual")
-        while True:
-            f_choice = input("Επιλογή: ")
-            if f_choice in ["1", "2", "3"]: break
+# --- Κύριο Πρόγραμμα ---
+if ticker:
+    try:
+        if analysis_mode == "Ιστορικές Τιμές":
+            freq = st.selectbox("Συχνότητα:", ["Daily", "Monthly", "Annual"])
+            freq_map = {"Daily": "1d", "Monthly": "1mo", "Annual": "1y"}
             
-        freq_map = {"1": "1d", "2": "1mo", "3": "1y"}
-        # Χρησιμοποιούμε auto_adjust=False για να βλέπουμε σίγουρα το Adj Close αν υπάρχει
-        data = yf.download(ticker, start=start, end=end, interval=freq_map[f_choice], auto_adjust=False)
-        print(data)
-
-    elif mode == "2":
-        print("\n1: Market Model, 2: Scholes-Williams, 3: Dimson")
-        while True:
-            m_choice = input("Επιλογή (1/2/3): ")
-            if m_choice in ["1", "2", "3"]: break
-        
-        methods_map = {"1": "Market Model", "2": "Scholes and Williams", "3": "Dimson"}
-        
-        # Λήψη δεδομένων με ρητή επιλογή στήλης για να αποφύγουμε το KeyError
-        # Κατεβάζουμε και τα δύο μαζί για να διαχειριστεί το yfinance το formatting σωστά
-        all_data = yf.download([ticker, "^GSPC"], start=start, end=end, auto_adjust=False)['Adj Close']
-        
-        if ticker in all_data.columns and "^GSPC" in all_data.columns:
-            stock_ret = all_data[ticker].pct_change().dropna()
-            market_ret = all_data["^GSPC"].pct_change().dropna()
+            with st.spinner('Λήψη δεδομένων...'):
+                data = yf.download(ticker, start=start_date, end=end_date, interval=freq_map[freq], auto_adjust=False)
             
-            beta, p_val = calculate_beta(stock_ret, market_ret, methods_map[m_choice])
+            if not data.empty:
+                st.subheader(f"Δεδομένα για τη μετοχή {ticker}")
+                st.line_chart(data['Adj Close'])
+                st.write(data)
+            else:
+                st.error("Δεν βρέθηκαν δεδομένα. Ελέγξτε το σύμβολο και τις ημερομηνίες.")
+
+        elif analysis_mode == "Υπολογισμός Beta (β)":
+            method = st.selectbox("Μέθοδος Υπολογισμού:", ["Market Model", "Scholes and Williams", "Dimson"])
             
-            print(f"\n>>> Αποτέλεσμα {methods_map[m_choice]}:")
-            print(f"Beta (β): {beta:.4f}")
-            print(f"P-Value: {p_val:.4f}")
-            print("Αξιολόγηση: " + ("Στατιστικά Σημαντικό" if p_val < 0.05 else "Μη Στατιστικά Σημαντικό"))
-        else:
-            print("Σφάλμα κατά τη λήψη των στηλών Adj Close.")
+            with st.spinner('Υπολογισμός...'):
+                all_data = yf.download([ticker, "^GSPC"], start=start_date, end=end_date, auto_adjust=False)['Adj Close']
+                
+                if ticker in all_data.columns and "^GSPC" in all_data.columns:
+                    stock_ret = all_data[ticker].pct_change().dropna()
+                    market_ret = all_data["^GSPC"].pct_change().dropna()
+                    
+                    beta, p_val = calculate_beta(stock_ret, market_ret, method)
+                    
+                    # Εμφάνιση Αποτελεσμάτων σε "Κάρτες"
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Beta (β)", f"{beta:.4f}")
+                    c2.metric("P-Value", f"{p_val:.4f}")
+                    significance = "Σημαντικό" if p_val < 0.05 else "Μη Σημαντικό"
+                    c3.metric("Στατιστική Σημαντικότητα", significance)
+                    
+                    # Γράφημα Συσχέτισης
+                    st.subheader("Διάγραμμα Συσχέτισης (Returns Analysis)")
+                    chart_data = pd.concat([stock_ret, market_ret], axis=1)
+                    st.scatter_chart(chart_data)
+                else:
+                    st.error("Αδυναμία λήψης δεδομένων για τον υπολογισμό του Beta.")
 
-if __name__ == "__main__":
-    main()
-
+    except Exception as e:
+        st.error(f"Παρουσιάστηκε σφάλμα: {e}")
+else:
+    st.info("Παρακαλώ εισάγετε ένα σύμβολο μετοχής στη sidebar για να ξεκινήσετε.")
