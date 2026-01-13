@@ -108,7 +108,6 @@ with tab2:
 # --- TAB 3: Ανοσοποίηση Ομολόγων ---
 with tab3:
     st.header("Bond Duration & Convexity")
-    [Image of bond price sensitivity to interest rate changes duration convexity]
     col_a, col_b = st.columns(2)
     with col_a:
         face = st.number_input("Ονομαστική Αξία:", value=1000.0)
@@ -116,3 +115,4 @@ with tab3:
     with col_b:
       years = st.number_input("Έτη μέχρι τη λήξη:", value=10, step=1)
         ytm = st.slider("Απόδοση YTM (0.04 = 4%):", 0.0, 0.20, 0.04, step=0.01)
+
