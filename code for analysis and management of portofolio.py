@@ -6,91 +6,113 @@ import statsmodels.api as sm
 from datetime import datetime, timedelta
 
 # --- Ρυθμίσεις Σελίδας ---
-st.set_page_config(page_title="Portfolio Analysis Tool", layout="wide")
-st.title("📊 Ανάλυση Μετοχών & Υπολογισμός Beta")
+st.set_page_config(page_title="Financial Analysis Pro", layout="wide")
+st.title("🚀 Financial Analysis & Portfolio Management")
 
-# --- Συναρτήσεις Υπολογισμού ---
-def calculate_beta(stock_returns, market_returns, method):
-    df = pd.concat([stock_returns, market_returns], axis=1).dropna()
-    df.columns = ['Stock', 'Market']
+# --- Συναρτήσεις Υπολογισμών ---
+def calculate_beta(stock_returns, benchmark_returns):
+    df = pd.concat([stock_returns, benchmark_returns], axis=1).dropna()
+    df.columns = ['Stock', 'Benchmark']
+    X = sm.add_constant(df['Benchmark'])
+    model = sm.OLS(df['Stock'], X).fit()
+    return model.params['Benchmark'], model.pvalues['Benchmark']
+
+def bond_analysis(face_value, coupon_rate, years, ytm):
+    coupons = [coupon_rate * face_value] * int(years)
+    coupons[-1] += face_value
+    times = list(range(1, int(years) + 1))
+    pv_cf = [cf / (1 + ytm)**t for cf, t in zip(coupons, times)]
+    price = sum(pv_cf)
+    dur = sum([pv * t for pv, t in zip(pv_cf, times)]) / price
+    conv = sum([pv * (t**2 + t) for pv, t in zip(pv_cf, times)]) / (price * (1 + ytm)**2)
+    return dur, conv, price
+
+# --- Δημιουργία Tabs ---
+tab1, tab2, tab3 = st.tabs(["📈 Stock Analysis", "⚖️ Beta Hedging", "⛓️ Bond Immunization"])
+
+# --- TAB 1: Ανάλυση Μετοχής ---
+with tab1:
+    st.header("Ανάλυση Μετοχής & Beta")
     
-    if method == "Market Model":
-        X = sm.add_constant(df['Market'])
-        model = sm.OLS(df['Stock'], X).fit()
-        return model.params['Market'], model.pvalues['Market']
-
-    elif method == "Scholes and Williams":
-        df['Market_Lag'] = df['Market'].shift(1)
-        df['Market_Lead'] = df['Market'].shift(-1)
-        df = df.dropna()
-        X = sm.add_constant(df[['Market', 'Market_Lag', 'Market_Lead']])
-        model = sm.OLS(df['Stock'], X).fit()
-        beta_sw = (model.params['Market'] + model.params['Market_Lag'] + model.params['Market_Lead'])
-        return beta_sw, model.f_pvalue
-
-    elif method == "Dimson":
-        df['Market_Lag1'] = df['Market'].shift(1)
-        df['Market_Lag2'] = df['Market'].shift(2)
-        df = df.dropna()
-        X = sm.add_constant(df[['Market', 'Market_Lag1', 'Market_Lag2']])
-        model = sm.OLS(df['Stock'], X).fit()
-        beta_dimson = model.params['Market'] + model.params['Market_Lag1'] + model.params['Market_Lag2']
-        return beta_dimson, model.f_pvalue
-
-# --- Sidebar για Εισαγωγή Δεδομένων ---
-st.sidebar.header("Παράμετροι Ανάλυσης")
-ticker = st.sidebar.text_input("Σύμβολο Μετοχής (π.χ. AAPL, TSLA)", "AAPL").upper()
-
-col1, col2 = st.sidebar.columns(2)
-start_date = col1.date_input("Έναρξη", datetime.now() - timedelta(days=365))
-end_date = col2.date_input("Λήξη", datetime.now())
-
-analysis_mode = st.sidebar.radio("Λειτουργία:", ["Ιστορικές Τιμές", "Υπολογισμός Beta (β)"])
-
-# --- Κύριο Πρόγραμμα ---
-if ticker:
-    try:
-        if analysis_mode == "Ιστορικές Τιμές":
-            freq = st.selectbox("Συχνότητα:", ["Daily", "Monthly", "Annual"])
-            freq_map = {"Daily": "1d", "Monthly": "1mo", "Annual": "1y"}
+    # Επιλογή Συχνότητας (Optimization: Προσθήκη Weekly & Annual)
+    col_freq = st.columns(1)[0]
+    freq_label = col_freq.selectbox("Επιλέξτε Συχνότητα Δεδομένων:", 
+                                  ["Daily", "Weekly", "Monthly", "Annual"])
+    
+    # Χάρτης για το yfinance
+    freq_map = {
+        "Daily": "1d",
+        "Weekly": "1wk",
+        "Monthly": "1mo",
+        "Annual": "1y" # Σημείωση: Το 1y δουλεύει καλύτερα ως resampling αν το yfinance έχει κενά
+    }
+    
+    c1, c2 = st.columns(2)
+    t1 = c1.text_input("Κύριο Ticker (π.χ. AAPL):", "AAPL").upper()
+    t2 = c2.text_input("Ticker Σύγκρισης (π.χ. ^GSPC):", "^GSPC").upper()
+    
+    col_s, col_e = st.columns(2)
+    start = col_s.date_input("Έναρξη", datetime.now() - timedelta(days=365*2))
+    end = col_e.date_input("Λήξη", datetime.now())
+    
+    if st.button("Εκτέλεση Ανάλυσης"):
+        with st.spinner('Λήψη δεδομένων...'):
+            # Λήψη δεδομένων με τη σωστή συχνότητα
+            data = yf.download([t1, t2], start=start, end=end, interval=freq_map[freq_label], auto_adjust=False)['Adj Close']
             
-            with st.spinner('Λήψη δεδομένων...'):
-                data = yf.download(ticker, start=start_date, end=end_date, interval=freq_map[freq], auto_adjust=False)
-            
-            if not data.empty:
-                st.subheader(f"Δεδομένα για τη μετοχή {ticker}")
-                st.line_chart(data['Adj Close'])
-                st.write(data)
-            else:
-                st.error("Δεν βρέθηκαν δεδομένα. Ελέγξτε το σύμβολο και τις ημερομηνίες.")
-
-        elif analysis_mode == "Υπολογισμός Beta (β)":
-            method = st.selectbox("Μέθοδος Υπολογισμού:", ["Market Model", "Scholes and Williams", "Dimson"])
-            
-            with st.spinner('Υπολογισμός...'):
-                all_data = yf.download([ticker, "^GSPC"], start=start_date, end=end_date, auto_adjust=False)['Adj Close']
+            if not data.empty and t1 in data.columns and t2 in data.columns:
+                st.subheader(f"Διάγραμμα Τιμών ({freq_label})")
+                st.line_chart(data[t1])
                 
-                if ticker in all_data.columns and "^GSPC" in all_data.columns:
-                    stock_ret = all_data[ticker].pct_change().dropna()
-                    market_ret = all_data["^GSPC"].pct_change().dropna()
+                # Υπολογισμός αποδόσεων
+                stock_ret = data[t1].pct_change().dropna()
+                bench_ret = data[t2].pct_change().dropna()
+                
+                if not stock_ret.empty:
+                    beta, p_val = calculate_beta(stock_ret, bench_ret)
                     
-                    beta, p_val = calculate_beta(stock_ret, market_ret, method)
+                    # Αποθήκευση του beta στο session_state για να το βλέπει το Tab 2
+                    st.session_state['current_beta'] = beta
+                    st.session_state['main_ticker'] = t1
+                    st.session_state['bench_ticker'] = t2
                     
-                    # Εμφάνιση Αποτελεσμάτων σε "Κάρτες"
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Beta (β)", f"{beta:.4f}")
-                    c2.metric("P-Value", f"{p_val:.4f}")
-                    significance = "Σημαντικό" if p_val < 0.05 else "Μη Σημαντικό"
-                    c3.metric("Στατιστική Σημαντικότητα", significance)
+                    res1, res2, res3 = st.columns(3)
+                    res1.metric(f"Beta (β) - {freq_label}", f"{beta:.4f}")
+                    res2.metric("P-Value", f"{p_val:.4f}")
+                    res3.metric("Σημαντικότητα", "ΝΑΙ" if p_val < 0.05 else "ΟΧΙ")
                     
-                    # Γράφημα Συσχέτισης
-                    st.subheader("Διάγραμμα Συσχέτισης (Returns Analysis)")
-                    chart_data = pd.concat([stock_ret, market_ret], axis=1)
-                    st.scatter_chart(chart_data)
+                    # Scatter Plot για οπτική επιβεβαίωση
+                    st.subheader("Συσχέτιση Αποδόσεων")
+                    scatter_df = pd.concat([stock_ret, bench_ret], axis=1)
+                    st.scatter_chart(scatter_df)
                 else:
-                    st.error("Αδυναμία λήψης δεδομένων για τον υπολογισμό του Beta.")
+                    st.error("Δεν υπάρχουν αρκετά δεδομένα για τον υπολογισμό των αποδόσεων.")
+            else:
+                st.error("Σφάλμα στη λήψη δεδομένων. Ελέγξτε τα Tickers.")
 
-    except Exception as e:
-        st.error(f"Παρουσιάστηκε σφάλμα: {e}")
-else:
-    st.info("Παρακαλώ εισάγετε ένα σύμβολο μετοχής στη sidebar για να ξεκινήσετε.")
+# --- TAB 2: Beta Neutrality ---
+with tab2:
+    st.header("Στρατηγική Beta-Neutral")
+    if 'current_beta' in st.session_state:
+        amount = st.number_input("Ποσό επένδυσης (€):", min_value=0.0, value=10000.0)
+        beta_val = st.session_state['current_beta']
+        t1_val = st.session_state['main_ticker']
+        t2_val = st.session_state['bench_ticker']
+        
+        hedge = beta_val * amount
+        st.write(f"Με βάση την **{freq_label}** ανάλυση:")
+        st.success(f"Για να καλύψετε τη θέση σας στο **{t1_val}**, πρέπει να σορτάρετε **{hedge:,.2f} €** στον δείκτη **{t2_val}**.")
+    else:
+        st.warning("Παρακαλώ τρέξτε πρώτα την ανάλυση στο Tab 1 για να υπολογιστεί το Beta.")
+
+# --- TAB 3: Ανοσοποίηση Ομολόγων ---
+with tab3:
+    st.header("Bond Duration & Convexity")
+    [Image of bond price sensitivity to interest rate changes duration convexity]
+    col_a, col_b = st.columns(2)
+    with col_a:
+        face = st.number_input("Ονομαστική Αξία:", value=1000.0)
+        coupon = st.slider("Ετήσιο Κουπόνι (0.05 = 5%):", 0.0, 0.20, 0.05, step=0.01)
+    with col_b:
+        years = st.number_input("Έτη μέχρι τη λήξη:", value=10, step=1)
+        ytm = st.slider("Απόδοση YTM (0.
