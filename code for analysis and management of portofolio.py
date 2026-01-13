@@ -15,7 +15,7 @@ def calculate_all_betas(stock_ret, market_ret):
     df = pd.concat([stock_ret, market_ret], axis=1).dropna()
     df.columns = ['Stock', 'Market']
     
-    # 1. Market Model (Simple OLS)
+    # 1. Market Model
     X1 = sm.add_constant(df['Market'])
     model1 = sm.OLS(df['Stock'], X1).fit()
     results['Market Model'] = (model1.params['Market'], model1.pvalues['Market'])
@@ -29,7 +29,7 @@ def calculate_all_betas(stock_ret, market_ret):
     beta_sw = model2.params['Market'] + model2.params['Market_Lag'] + model2.params['Market_Lead']
     results['Scholes-Williams'] = (beta_sw, model2.f_pvalue)
     
-    # 3. Dimson (Aggregated Coefficients)
+    # 3. Dimson
     df['Market_Lag1'] = df['Market'].shift(1)
     df['Market_Lag2'] = df['Market'].shift(2)
     df_d = df.dropna()
@@ -58,51 +58,55 @@ with tab1:
     st.header("Επισκόπηση Μετοχής")
     t1_view = st.text_input("Ticker:", "AAPL", key="t1_v").upper()
     if st.button("Προβολή"):
+        # Optimization: Χρησιμοποιούμε το 'Close' και κάνουμε flatten τον πίνακα
         data_v = yf.download(t1_view, period="1y")
-        st.line_chart(data_v['Adj Close'])
+        if not data_v.empty:
+            # Διόρθωση για το KeyError: Επιλέγουμε τη στήλη ανεξάρτητα από το MultiIndex
+            st.line_chart(data_v['Close'])
+            st.write(data_v.tail())
 
 # --- TAB 2: Advanced Beta Analysis ---
 with tab2:
     st.header("Υπολογισμός Beta (Market, Scholes-Williams, Dimson)")
-    
     freq = st.selectbox("Συχνότητα:", ["Daily", "Weekly", "Monthly", "Annual"])
     c1, c2 = st.columns(2)
     t1 = c1.text_input("Κύρια Μετοχή:", "AAPL").upper()
     t2 = c2.text_input("Δείκτης Αναφοράς:", "^GSPC").upper()
     
     if st.button("Εκτέλεση Στατιστικής Ανάλυσης"):
-        # Λήψη δεδομένων 5 ετών για αξιοπιστία
-        raw = yf.download([t1, t2], start=(datetime.now() - timedelta(days=1825)), end=datetime.now())['Adj Close']
+        raw = yf.download([t1, t2], start=(datetime.now() - timedelta(days=1825)), end=datetime.now())
         
-        if not raw.empty and t1 in raw.columns:
+        # Έλεγχος αν τα δεδομένα έχουν κατέβει σωστά
+        if not raw.empty:
+            # Flattening MultiIndex columns για αποφυγή KeyError
+            prices = raw['Close'] 
+            
             # Resampling Logic
-            if freq == "Weekly": data = raw.resample('W').last()
-            elif freq == "Monthly": data = raw.resample('M').last()
-            elif freq == "Annual": data = raw.resample('Y').last()
-            else: data = raw
+            if freq == "Weekly": data = prices.resample('W').last()
+            elif freq == "Monthly": data = prices.resample('M').last()
+            elif freq == "Annual": data = prices.resample('Y').last()
+            else: data = prices
             
-            stock_ret = data[t1].pct_change().dropna()
-            market_ret = data[t2].pct_change().dropna()
-            
-            # Υπολογισμός και με τις 3 μεθόδους
-            all_results = calculate_all_betas(stock_ret, market_ret)
-            
-            # Εμφάνιση Αποτελεσμάτων σε στήλες
-            cols = st.columns(3)
-            for i, (method, val) in enumerate(all_results.items()):
-                with cols[i]:
-                    st.subheader(method)
-                    st.metric("Beta", f"{val[0]:.4f}")
-                    st.write(f"P-Value: {val[1]:.4f}")
-                    if val[1] < 0.05:
-                        st.success("Στατιστικά Σημαντικό")
-                    else:
-                        st.warning("Μη Σημαντικό")
+            if t1 in data.columns and t2 in data.columns:
+                stock_ret = data[t1].pct_change().dropna()
+                market_ret = data[t2].pct_change().dropna()
+                
+                all_results = calculate_all_betas(stock_ret, market_ret)
+                
+                cols = st.columns(3)
+                for i, (method, val) in enumerate(all_results.items()):
+                    with cols[i]:
+                        st.subheader(method)
+                        st.metric("Beta", f"{val[0]:.4f}")
+                        st.write(f"P-Value: {val[1]:.4f}")
+                        if val[1] < 0.05:
+                            st.success("Στατιστικά Σημαντικό")
+                        else:
+                            st.warning("Μη Σημαντικό")
 
-            # Εύρεση της καλύτερης μεθόδου
-            best_method = min(all_results, key=lambda x: all_results[x][1])
-            st.divider()
-            st.info(f"💡 Η πιο αξιόπιστη μέθοδος για το συγκεκριμένο δείγμα είναι η **{best_method}** (χαμηλότερο P-Value).")
+                best_method = min(all_results, key=lambda x: all_results[x][1])
+                st.divider()
+                st.info(f"💡 Η πιο αξιόπιστη μέθοδος είναι η **{best_method}**.")
 
 # --- TAB 3: Bond Immunization ---
 with tab3:
@@ -113,4 +117,14 @@ with tab3:
         coupon = st.slider("Ετήσιο Κουπόνι:", 0.0, 0.20, 0.05, step=0.01)
     with col_b:
         years = st.number_input("Έτη:", value=10, step=1)
-        ytm
+        ytm = st.slider("Απόδοση YTM:", 0.0, 0.20, 0.04, step=0.01)
+    
+    target_dur = st.number_input("Επιθυμητή Διάρκεια:", value=5.0)
+    if st.button("Υπολογισμός"):
+        dur, conv, price = bond_analysis(face, coupon, years, ytm)
+        st.metric("Τιμή", f"{price:,.2f} €")
+        st.metric("Duration", f"{dur:.2f}")
+        if abs(dur - target_dur) < 0.1:
+            st.success("✅ ΑΝΟΣΟΠΟΙΗΜΕΝΟ")
+        else:
+            st.warning(f"Απόκλιση: {dur - target_dur:.2f}")
