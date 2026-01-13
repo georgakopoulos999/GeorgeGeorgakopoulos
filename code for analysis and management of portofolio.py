@@ -114,5 +114,5 @@ with tab3:
         face = st.number_input("Ονομαστική Αξία:", value=1000.0)
         coupon = st.slider("Ετήσιο Κουπόνι (0.05 = 5%):", 0.0, 0.20, 0.05, step=0.01)
     with col_b:
-        years = st.number_input("Έτη μέχρι τη λήξη:", value=10, step=1)
-        ytm = st.slider("Απόδοση YTM (0.
+      years = st.number_input("Έτη μέχρι τη λήξη:", value=10, step=1)
+        ytm = st.slider("Απόδοση YTM (0.04 = 4%):", 0.0, 0.20, 0.04, step=0.01)
