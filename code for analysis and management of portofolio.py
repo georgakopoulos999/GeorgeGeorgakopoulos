@@ -48,20 +48,38 @@ def bond_analysis(face_value, coupon_rate, years, ytm):
 # --- Δημιουργία Tabs ---
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Stock View", "⚖️ Beta Analysis", "⛓️ Bond Immunization", "📉 Statman Diversification"])
 
-# --- TAB 1: Stock View ---
+# --- TAB 1: Stock View (Βελτιωμένο με Ημερομηνίες και Συχνότητα) ---
 with tab1:
     st.header("Επισκόπηση Μετοχής")
-    t1_view = st.text_input("Ticker:", "AAPL", key="t1_v").upper()
-    if st.button("Προβολή"):
-        data_v = yf.download(t1_view, period="1y")
-        if not data_v.empty:
-            st.line_chart(data_v['Close'])
-            st.write(data_v.tail())
+    
+    col1, col2 = st.columns(2)
+    t1_view = col1.text_input("Ticker:", "AAPL", key="t1_v").upper()
+    freq_v = col2.selectbox("Συχνότητα Γραφήματος:", ["Daily", "Weekly", "Monthly", "Annual"], index=0)
+    
+    col3, col4 = st.columns(2)
+    start_v = col3.date_input("Ημερομηνία Έναρξης:", datetime.now() - timedelta(days=365))
+    end_v = col4.date_input("Ημερομηνία Λήξης:", datetime.now())
+    
+    if st.button("Προβολή Τιμών"):
+        # Κατεβάζουμε daily δεδομένα για να κάνουμε σωστό resampling
+        raw_v = yf.download(t1_view, start=start_v, end=end_v)
+        if not raw_v.empty:
+            prices_v = raw_v['Close']
+            
+            # Resampling βάσει επιλογής χρήστη
+            if freq_v == "Weekly": data_plot = prices_v.resample('W').last()
+            elif freq_v == "Monthly": data_plot = prices_v.resample('M').last()
+            elif freq_v == "Annual": data_plot = prices_v.resample('Y').last()
+            else: data_plot = prices_v
+            
+            st.subheader(f"Διάγραμμα Τιμών ({freq_v}) - {t1_view}")
+            st.line_chart(data_plot)
+            st.write("Τελευταίες Τιμές:", data_plot.tail())
 
 # --- TAB 2: Advanced Beta Analysis ---
 with tab2:
     st.header("Υπολογισμός Beta")
-    freq = st.selectbox("Συχνότητα:", ["Daily", "Weekly", "Monthly", "Annual"])
+    freq = st.selectbox("Συχνότητα Υπολογισμού Beta:", ["Daily", "Weekly", "Monthly", "Annual"])
     c1, c2 = st.columns(2)
     t1 = c1.text_input("Κύρια Μετοχή:", "AAPL").upper()
     t2 = c2.text_input("Δείκτης Αναφοράς:", "^GSPC").upper()
@@ -74,17 +92,18 @@ with tab2:
             elif freq == "Annual": data = prices.resample('Y').last()
             else: data = prices
             
-            stock_ret = data[t1].pct_change().dropna()
-            market_ret = data[t2].pct_change().dropna()
-            all_results = calculate_all_betas(stock_ret, market_ret)
-            cols = st.columns(3)
-            for i, (method, val) in enumerate(all_results.items()):
-                with cols[i]:
-                    st.subheader(method)
-                    st.metric("Beta", f"{val[0]:.4f}")
-                    st.write(f"P-Value: {val[1]:.4f}")
-            best_method = min(all_results, key=lambda x: all_results[x][1])
-            st.info(f"💡 Καλύτερη μέθοδος: {best_method}")
+            if t1 in data.columns and t2 in data.columns:
+                stock_ret = data[t1].pct_change().dropna()
+                market_ret = data[t2].pct_change().dropna()
+                all_results = calculate_all_betas(stock_ret, market_ret)
+                cols = st.columns(3)
+                for i, (method, val) in enumerate(all_results.items()):
+                    with cols[i]:
+                        st.subheader(method)
+                        st.metric("Beta", f"{val[0]:.4f}")
+                        st.write(f"P-Value: {val[1]:.4f}")
+                best_method = min(all_results, key=lambda x: all_results[x][1])
+                st.info(f"💡 Καλύτερη μέθοδος: {best_method}")
 
 # --- TAB 3: Bond Immunization ---
 with tab3:
@@ -102,36 +121,22 @@ with tab3:
 # --- TAB 4: Statman Diversification ---
 with tab4:
     st.header("Ανάλυση Κινδύνου κατά Statman")
-    st.write("Επιλέξτε μια λίστα μετοχών για να δείτε πώς μειώνεται ο κίνδυνος (Standard Deviation) μέσω της διαφοροποίησης.")
-    
-    tickers_input = st.text_area("Εισάγετε Tickers χωρισμένα με κόμμα (π.χ. AAPL, TSLA, MSFT, GOOG, AMZN, META):", "AAPL, TSLA, MSFT, GOOG, AMZN")
+    tickers_input = st.text_area("Εισάγετε Tickers χωρισμένα με κόμμα:", "AAPL, TSLA, MSFT, GOOG, AMZN")
     ticker_list = [t.strip().upper() for t in tickers_input.split(",")]
     
     if st.button("Ανάλυση Διαφοροποίησης"):
-        with st.spinner("Υπολογισμός κινδύνου..."):
-            data_port = yf.download(ticker_list, period="1y")['Close']
-            if not data_port.empty:
-                returns = data_port.pct_change().dropna()
-                
-                risk_levels = []
-                for i in range(1, len(ticker_list) + 1):
-                    subset = returns.iloc[:, :i]
-                    # Υπολογισμός κινδύνου χαρτοφυλακίου (με ίσα βάρη)
-                    weights = np.array([1/i] * i)
-                    port_variance = np.dot(weights.T, np.dot(subset.cov() * 252, weights))
-                    port_std = np.sqrt(port_variance)
-                    risk_levels.append(port_std)
-                
-                # Δημιουργία DataFrame για το γράφημα
-                df_statman = pd.DataFrame({
-                    "Αριθμός Μετοχών": range(1, len(ticker_list) + 1),
-                    "Κίνδυνος (Standard Deviation)": risk_levels
-                })
-                
-                st.subheader("Μείωση Κινδύνου Χαρτοφυλακίου")
-                st.line_chart(df_statman.set_index("Αριθμός Μετοχών"))
-                
-                # Υπολογισμός μείωσης
-                reduction = (risk_levels[0] - risk_levels[-1]) / risk_levels[0] * 100
-                st.success(f"Προσθέτοντας {len(ticker_list)} μετοχές, μειώσατε τον συνολικό κίνδυνο κατά {reduction:.2f}% σε σχέση με την πρώτη μετοχή.")
-                st.table(df_statman)
+        data_port = yf.download(ticker_list, period="2y")['Close']
+        if not data_port.empty:
+            returns = data_port.pct_change().dropna()
+            risk_levels = []
+            for i in range(1, len(ticker_list) + 1):
+                subset = returns.iloc[:, :i]
+                weights = np.array([1/i] * i)
+                port_variance = np.dot(weights.T, np.dot(subset.cov() * 252, weights))
+                port_std = np.sqrt(port_variance)
+                risk_levels.append(port_std)
+            
+            df_statman = pd.DataFrame({"Αριθμός Μετοχών": range(1, len(ticker_list) + 1), "Κίνδυνος": risk_levels})
+            st.line_chart(df_statman.set_index("Αριθμός Μετοχών"))
+            reduction = (risk_levels[0] - risk_levels[-1]) / risk_levels[0] * 100
+            st.success(f"Μείωση κινδύνου κατά {reduction:.2f}%")
