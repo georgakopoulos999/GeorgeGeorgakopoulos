@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="Financial Analysis Pro", layout="wide")
 st.title("🚀 Financial Analysis & Portfolio Management")
 
-# --- Συναρτήσεις ---
+# --- Συναρτήσεις Υπολογισμών ---
 def calculate_all_betas(stock_ret, market_ret):
     results = {}
     df = pd.concat([stock_ret, market_ret], axis=1).dropna()
@@ -48,95 +48,117 @@ def bond_analysis(face_value, coupon_rate, years, ytm):
 # --- Δημιουργία Tabs ---
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Stock View", "⚖️ Beta Analysis", "⛓️ Bond Immunization", "📉 Statman Diversification"])
 
-# --- TAB 1: Stock View (Βελτιωμένο με Ημερομηνίες και Συχνότητα) ---
+# --- TAB 1: Stock View ---
 with tab1:
     st.header("Επισκόπηση Μετοχής")
     
-    col1, col2 = st.columns(2)
-    t1_view = col1.text_input("Ticker:", "AAPL", key="t1_v").upper()
-    freq_v = col2.selectbox("Συχνότητα Γραφήματος:", ["Daily", "Weekly", "Monthly", "Annual"], index=0)
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        t1_view = st.text_input("Εισάγετε Ticker:", "AAPL").upper()
+        # Μικρό μήνυμα υποβοήθησης ακριβώς κάτω από το input
+        st.caption("💡 Χρησιμοποιήστε επιθέματα για διεθνή χρηματιστήρια: **.AT** (Αθήνα), **.DE** (Γερμανία), **.L** (Λονδίνο), **.PA** (Παρίσι).")
     
-    col3, col4 = st.columns(2)
-    start_v = col3.date_input("Ημερομηνία Έναρξης:", datetime.now() - timedelta(days=365))
-    end_v = col4.date_input("Ημερομηνία Λήξης:", datetime.now())
+    with col2:
+        freq_v = st.selectbox("Συχνότητα Γραφήματος:", ["Daily", "Weekly", "Monthly", "Annual"])
+
+    period_type = st.radio("Επιλογή Περιόδου:", ["Συγκεκριμένο Εύρος", "Όλο το Ιστορικό (Max)"], horizontal=True)
     
-    if st.button("Προβολή Τιμών"):
-        # Κατεβάζουμε daily δεδομένα για να κάνουμε σωστό resampling
-        raw_v = yf.download(t1_view, start=start_v, end=end_v)
-        if not raw_v.empty:
+    if period_type == "Συγκεκριμένο Εύρος":
+        c3, c4 = st.columns(2)
+        start_v = c3.date_input("Ημερομηνία Έναρξης:", datetime.now() - timedelta(days=365))
+        end_v = c4.date_input("Ημερομηνία Λήξης:", datetime.now())
+    else:
+        start_v, end_v = None, None
+
+    if st.button("Προβολή Τιμών", type="primary"):
+        ticker_obj = yf.Ticker(t1_view)
+        
+        if period_type == "Όλο το Ιστορικό (Max)":
+            raw_v = ticker_obj.history(period="max")
+        else:
+            raw_v = yf.download(t1_view, start=start_v, end=end_v)
+
+        if raw_v.empty:
+            try:
+                info = ticker_obj.info
+                first_date_epoch = info.get('firstTradeDateEpochUtc')
+                if first_date_epoch:
+                    first_date = datetime.fromtimestamp(first_date_epoch).date()
+                    st.error(f"❌ Δεν υπάρχουν δεδομένα για την επιλεγμένη περίοδο.")
+                    st.info(f"📅 Η μετοχή **{t1_view}** ξεκίνησε τη διαπραγμάτευση στις: **{first_date}**")
+                else:
+                    st.error("Το Ticker δεν βρέθηκε. Βεβαιωθείτε ότι είναι σωστό.")
+            except:
+                st.error("Σφάλμα σύνδεσης. Ελέγξτε το Ticker.")
+        else:
             prices_v = raw_v['Close']
-            
-            # Resampling βάσει επιλογής χρήστη
             if freq_v == "Weekly": data_plot = prices_v.resample('W').last()
             elif freq_v == "Monthly": data_plot = prices_v.resample('M').last()
             elif freq_v == "Annual": data_plot = prices_v.resample('Y').last()
             else: data_plot = prices_v
             
-            st.subheader(f"Διάγραμμα Τιμών ({freq_v}) - {t1_view}")
-            st.line_chart(data_plot)
-            st.write("Τελευταίες Τιμές:", data_plot.tail())
+            st.subheader(f"Διάγραμμα {freq_v} Τιμών - {t1_view}")
+            st.area_chart(data_plot) # Area chart για πιο όμορφο αποτέλεσμα
+            st.success(f"Δεδομένα από {data_plot.index.date.min()} έως {data_plot.index.date.max()}")
 
-# --- TAB 2: Advanced Beta Analysis ---
+# --- TAB 2: Beta Analysis (Resampling & Multiple Methods) ---
 with tab2:
     st.header("Υπολογισμός Beta")
-    freq = st.selectbox("Συχνότητα Υπολογισμού Beta:", ["Daily", "Weekly", "Monthly", "Annual"])
-    c1, c2 = st.columns(2)
-    t1 = c1.text_input("Κύρια Μετοχή:", "AAPL").upper()
-    t2 = c2.text_input("Δείκτης Αναφοράς:", "^GSPC").upper()
-    if st.button("Εκτέλεση Στατιστικής Ανάλυσης"):
-        raw = yf.download([t1, t2], start=(datetime.now() - timedelta(days=1825)), end=datetime.now())
-        if not raw.empty:
-            prices = raw['Close']
-            if freq == "Weekly": data = prices.resample('W').last()
-            elif freq == "Monthly": data = prices.resample('M').last()
-            elif freq == "Annual": data = prices.resample('Y').last()
-            else: data = prices
+    freq_b = st.selectbox("Συχνότητα Δεδομένων για Beta:", ["Daily", "Weekly", "Monthly", "Annual"])
+    
+    c_b1, c_b2 = st.columns(2)
+    t1_b = c_b1.text_input("Κύρια Μετοχή:", "AAPL", key="t1b").upper()
+    t2_b = c_b2.text_input("Δείκτης (Benchmark):", "^GSPC", key="t2b").upper()
+    
+    if st.button("Ανάλυση Beta"):
+        # Λήψη δεδομένων 5 ετών
+        raw_b = yf.download([t1_b, t2_b], start=(datetime.now() - timedelta(days=1825)), end=datetime.now())['Close']
+        if not raw_b.empty:
+            if freq_b == "Weekly": data_b = raw_b.resample('W').last()
+            elif freq_b == "Monthly": data_b = raw_b.resample('M').last()
+            elif freq_b == "Annual": data_b = raw_b.resample('Y').last()
+            else: data_b = raw_b
             
-            if t1 in data.columns and t2 in data.columns:
-                stock_ret = data[t1].pct_change().dropna()
-                market_ret = data[t2].pct_change().dropna()
-                all_results = calculate_all_betas(stock_ret, market_ret)
-                cols = st.columns(3)
-                for i, (method, val) in enumerate(all_results.items()):
-                    with cols[i]:
-                        st.subheader(method)
-                        st.metric("Beta", f"{val[0]:.4f}")
-                        st.write(f"P-Value: {val[1]:.4f}")
-                best_method = min(all_results, key=lambda x: all_results[x][1])
-                st.info(f"💡 Καλύτερη μέθοδος: {best_method}")
+            s_ret = data_b[t1_b].pct_change().dropna()
+            m_ret = data_b[t2_b].pct_change().dropna()
+            betas = calculate_all_betas(s_ret, m_ret)
+            
+            cols_b = st.columns(3)
+            for i, (m, v) in enumerate(betas.items()):
+                with cols_b[i]:
+                    st.metric(m, f"{v[0]:.4f}", f"p={v[1]:.3f}", delta_color="inverse")
+            best = min(betas, key=lambda x: betas[x][1])
+            st.info(f"Η μέθοδος **{best}** είναι η πιο αξιόπιστη.")
 
 # --- TAB 3: Bond Immunization ---
 with tab3:
     st.header("Ανοσοποίηση Ομολόγων")
-    col_a, col_b = st.columns(2)
-    face = col_a.number_input("Ονομαστική Αξία:", value=1000.0)
-    coupon = col_a.slider("Ετήσιο Κουπόνι:", 0.0, 0.20, 0.05)
-    years = col_b.number_input("Έτη:", value=10)
-    ytm = col_b.slider("Απόδοση YTM:", 0.0, 0.20, 0.04)
-    if st.button("Υπολογισμός Ομολόγου"):
-        dur, conv, price = bond_analysis(face, coupon, years, ytm)
-        st.metric("Τιμή", f"{price:,.2f} €")
-        st.metric("Duration", f"{dur:.2f}")
-
-# --- TAB 4: Statman Diversification ---
-with tab4:
-    st.header("Ανάλυση Κινδύνου κατά Statman")
-    tickers_input = st.text_area("Εισάγετε Tickers χωρισμένα με κόμμα:", "AAPL, TSLA, MSFT, GOOG, AMZN")
-    ticker_list = [t.strip().upper() for t in tickers_input.split(",")]
+    ca, cb = st.columns(2)
+    f_val = ca.number_input("Ονομαστική Αξία:", value=1000.0)
+    c_rate = ca.slider("Κουπόνι:", 0.0, 0.20, 0.05)
+    y_mat = cb.number_input("Έτη:", value=10)
+    ytm_val = cb.slider("YTM:", 0.0, 0.20, 0.04)
+    t_dur = st.number_input("Στόχος Duration:", value=5.0)
     
-    if st.button("Ανάλυση Διαφοροποίησης"):
-        data_port = yf.download(ticker_list, period="2y")['Close']
-        if not data_port.empty:
-            returns = data_port.pct_change().dropna()
-            risk_levels = []
-            for i in range(1, len(ticker_list) + 1):
-                subset = returns.iloc[:, :i]
-                weights = np.array([1/i] * i)
-                port_variance = np.dot(weights.T, np.dot(subset.cov() * 252, weights))
-                port_std = np.sqrt(port_variance)
-                risk_levels.append(port_std)
-            
-            df_statman = pd.DataFrame({"Αριθμός Μετοχών": range(1, len(ticker_list) + 1), "Κίνδυνος": risk_levels})
-            st.line_chart(df_statman.set_index("Αριθμός Μετοχών"))
-            reduction = (risk_levels[0] - risk_levels[-1]) / risk_levels[0] * 100
-            st.success(f"Μείωση κινδύνου κατά {reduction:.2f}%")
+    if st.button("Υπολογισμός"):
+        d, c, p = bond_analysis(f_val, c_rate, y_mat, ytm_val)
+        st.metric("Τιμή", f"{p:,.2f} €")
+        st.metric("Duration", f"{d:.2f}")
+        if abs(d - t_dur) < 0.1: st.success("ΑΝΟΣΟΠΟΙΗΜΕΝΟ")
+        else: st.warning(f"Απόκλιση: {d-t_dur:.2f}")
+
+# --- TAB 4: Statman ---
+with tab4:
+    st.header("Ανάλυση Διαφοροποίησης")
+    t_input = st.text_area("Λίστα Tickers (χωρισμένα με κόμμα):", "AAPL, TSLA, MSFT, AMZN, GOOG")
+    t_list = [x.strip().upper() for x in t_input.split(",")]
+    if st.button("Υπολογισμός Στατιστικών"):
+        d_p = yf.download(t_list, period="2y")['Close']
+        rets = d_p.pct_change().dropna()
+        r_levels = []
+        for n in range(1, len(t_list) + 1):
+            sub = rets.iloc[:, :n]
+            w = np.array([1/n]*n)
+            v = np.dot(w.T, np.dot(sub.cov() * 252, w))
+            r_levels.append(np.sqrt(v))
+        st.line_chart(pd.DataFrame({"Κίνδυνος": r_levels}, index=range(1, len(t_list)+1)))
