@@ -9,18 +9,15 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="Financial Analysis Pro", layout="wide")
 st.title("🚀 Financial Analysis & Portfolio Management")
 
-# --- Συναρτήσεις Υπολογισμών Beta ---
+# --- Συναρτήσεις ---
 def calculate_all_betas(stock_ret, market_ret):
     results = {}
     df = pd.concat([stock_ret, market_ret], axis=1).dropna()
     df.columns = ['Stock', 'Market']
-    
-    # 1. Market Model
     X1 = sm.add_constant(df['Market'])
     model1 = sm.OLS(df['Stock'], X1).fit()
     results['Market Model'] = (model1.params['Market'], model1.pvalues['Market'])
     
-    # 2. Scholes and Williams
     df['Market_Lag'] = df['Market'].shift(1)
     df['Market_Lead'] = df['Market'].shift(-1)
     df_sw = df.dropna()
@@ -29,7 +26,6 @@ def calculate_all_betas(stock_ret, market_ret):
     beta_sw = model2.params['Market'] + model2.params['Market_Lag'] + model2.params['Market_Lead']
     results['Scholes-Williams'] = (beta_sw, model2.f_pvalue)
     
-    # 3. Dimson
     df['Market_Lag1'] = df['Market'].shift(1)
     df['Market_Lag2'] = df['Market'].shift(2)
     df_d = df.dropna()
@@ -37,7 +33,6 @@ def calculate_all_betas(stock_ret, market_ret):
     model3 = sm.OLS(df_d['Stock'], X3).fit()
     beta_dimson = model3.params['Market'] + model3.params['Market_Lag1'] + model3.params['Market_Lag2']
     results['Dimson'] = (beta_dimson, model3.f_pvalue)
-    
     return results
 
 def bond_analysis(face_value, coupon_rate, years, ytm):
@@ -51,80 +46,92 @@ def bond_analysis(face_value, coupon_rate, years, ytm):
     return dur, conv, price
 
 # --- Δημιουργία Tabs ---
-tab1, tab2, tab3 = st.tabs(["📈 Stock View", "⚖️ Advanced Beta Analysis", "⛓️ Bond Immunization"])
+tab1, tab2, tab3, tab4 = st.tabs(["📈 Stock View", "⚖️ Beta Analysis", "⛓️ Bond Immunization", "📉 Statman Diversification"])
 
 # --- TAB 1: Stock View ---
 with tab1:
     st.header("Επισκόπηση Μετοχής")
     t1_view = st.text_input("Ticker:", "AAPL", key="t1_v").upper()
     if st.button("Προβολή"):
-        # Optimization: Χρησιμοποιούμε το 'Close' και κάνουμε flatten τον πίνακα
         data_v = yf.download(t1_view, period="1y")
         if not data_v.empty:
-            # Διόρθωση για το KeyError: Επιλέγουμε τη στήλη ανεξάρτητα από το MultiIndex
             st.line_chart(data_v['Close'])
             st.write(data_v.tail())
 
 # --- TAB 2: Advanced Beta Analysis ---
 with tab2:
-    st.header("Υπολογισμός Beta (Market, Scholes-Williams, Dimson)")
+    st.header("Υπολογισμός Beta")
     freq = st.selectbox("Συχνότητα:", ["Daily", "Weekly", "Monthly", "Annual"])
     c1, c2 = st.columns(2)
     t1 = c1.text_input("Κύρια Μετοχή:", "AAPL").upper()
     t2 = c2.text_input("Δείκτης Αναφοράς:", "^GSPC").upper()
-    
     if st.button("Εκτέλεση Στατιστικής Ανάλυσης"):
         raw = yf.download([t1, t2], start=(datetime.now() - timedelta(days=1825)), end=datetime.now())
-        
-        # Έλεγχος αν τα δεδομένα έχουν κατέβει σωστά
         if not raw.empty:
-            # Flattening MultiIndex columns για αποφυγή KeyError
-            prices = raw['Close'] 
-            
-            # Resampling Logic
+            prices = raw['Close']
             if freq == "Weekly": data = prices.resample('W').last()
             elif freq == "Monthly": data = prices.resample('M').last()
             elif freq == "Annual": data = prices.resample('Y').last()
             else: data = prices
             
-            if t1 in data.columns and t2 in data.columns:
-                stock_ret = data[t1].pct_change().dropna()
-                market_ret = data[t2].pct_change().dropna()
-                
-                all_results = calculate_all_betas(stock_ret, market_ret)
-                
-                cols = st.columns(3)
-                for i, (method, val) in enumerate(all_results.items()):
-                    with cols[i]:
-                        st.subheader(method)
-                        st.metric("Beta", f"{val[0]:.4f}")
-                        st.write(f"P-Value: {val[1]:.4f}")
-                        if val[1] < 0.05:
-                            st.success("Στατιστικά Σημαντικό")
-                        else:
-                            st.warning("Μη Σημαντικό")
-
-                best_method = min(all_results, key=lambda x: all_results[x][1])
-                st.divider()
-                st.info(f"💡 Η πιο αξιόπιστη μέθοδος είναι η **{best_method}**.")
+            stock_ret = data[t1].pct_change().dropna()
+            market_ret = data[t2].pct_change().dropna()
+            all_results = calculate_all_betas(stock_ret, market_ret)
+            cols = st.columns(3)
+            for i, (method, val) in enumerate(all_results.items()):
+                with cols[i]:
+                    st.subheader(method)
+                    st.metric("Beta", f"{val[0]:.4f}")
+                    st.write(f"P-Value: {val[1]:.4f}")
+            best_method = min(all_results, key=lambda x: all_results[x][1])
+            st.info(f"💡 Καλύτερη μέθοδος: {best_method}")
 
 # --- TAB 3: Bond Immunization ---
 with tab3:
     st.header("Ανοσοποίηση Ομολόγων")
     col_a, col_b = st.columns(2)
-    with col_a:
-        face = st.number_input("Ονομαστική Αξία:", value=1000.0)
-        coupon = st.slider("Ετήσιο Κουπόνι:", 0.0, 0.20, 0.05, step=0.01)
-    with col_b:
-        years = st.number_input("Έτη:", value=10, step=1)
-        ytm = st.slider("Απόδοση YTM:", 0.0, 0.20, 0.04, step=0.01)
-    
-    target_dur = st.number_input("Επιθυμητή Διάρκεια:", value=5.0)
-    if st.button("Υπολογισμός"):
+    face = col_a.number_input("Ονομαστική Αξία:", value=1000.0)
+    coupon = col_a.slider("Ετήσιο Κουπόνι:", 0.0, 0.20, 0.05)
+    years = col_b.number_input("Έτη:", value=10)
+    ytm = col_b.slider("Απόδοση YTM:", 0.0, 0.20, 0.04)
+    if st.button("Υπολογισμός Ομολόγου"):
         dur, conv, price = bond_analysis(face, coupon, years, ytm)
         st.metric("Τιμή", f"{price:,.2f} €")
         st.metric("Duration", f"{dur:.2f}")
-        if abs(dur - target_dur) < 0.1:
-            st.success("✅ ΑΝΟΣΟΠΟΙΗΜΕΝΟ")
-        else:
-            st.warning(f"Απόκλιση: {dur - target_dur:.2f}")
+
+# --- TAB 4: Statman Diversification ---
+with tab4:
+    st.header("Ανάλυση Κινδύνου κατά Statman")
+    st.write("Επιλέξτε μια λίστα μετοχών για να δείτε πώς μειώνεται ο κίνδυνος (Standard Deviation) μέσω της διαφοροποίησης.")
+    
+    tickers_input = st.text_area("Εισάγετε Tickers χωρισμένα με κόμμα (π.χ. AAPL, TSLA, MSFT, GOOG, AMZN, META):", "AAPL, TSLA, MSFT, GOOG, AMZN")
+    ticker_list = [t.strip().upper() for t in tickers_input.split(",")]
+    
+    if st.button("Ανάλυση Διαφοροποίησης"):
+        with st.spinner("Υπολογισμός κινδύνου..."):
+            data_port = yf.download(ticker_list, period="1y")['Close']
+            if not data_port.empty:
+                returns = data_port.pct_change().dropna()
+                
+                risk_levels = []
+                for i in range(1, len(ticker_list) + 1):
+                    subset = returns.iloc[:, :i]
+                    # Υπολογισμός κινδύνου χαρτοφυλακίου (με ίσα βάρη)
+                    weights = np.array([1/i] * i)
+                    port_variance = np.dot(weights.T, np.dot(subset.cov() * 252, weights))
+                    port_std = np.sqrt(port_variance)
+                    risk_levels.append(port_std)
+                
+                # Δημιουργία DataFrame για το γράφημα
+                df_statman = pd.DataFrame({
+                    "Αριθμός Μετοχών": range(1, len(ticker_list) + 1),
+                    "Κίνδυνος (Standard Deviation)": risk_levels
+                })
+                
+                st.subheader("Μείωση Κινδύνου Χαρτοφυλακίου")
+                st.line_chart(df_statman.set_index("Αριθμός Μετοχών"))
+                
+                # Υπολογισμός μείωσης
+                reduction = (risk_levels[0] - risk_levels[-1]) / risk_levels[0] * 100
+                st.success(f"Προσθέτοντας {len(ticker_list)} μετοχές, μειώσατε τον συνολικό κίνδυνο κατά {reduction:.2f}% σε σχέση με την πρώτη μετοχή.")
+                st.table(df_statman)
